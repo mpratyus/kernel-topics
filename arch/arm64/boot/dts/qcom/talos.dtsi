@@ -657,6 +657,11 @@
 			reg = <0x0 0x97715000 0x0 0x2000>;
 			no-map;
 		};
+
+		pil_camera_mem: pil-camera-region@97717000 {
+			reg = <0x0 0x97717000 0x0 0x800000>;
+			no-map;
+		};
 	};
 
 	soc: soc@0 {
