@@ -421,7 +421,7 @@
 	cpu-0-0-0-thermal {
 		trips {
 			cpu0_active: cpu-active {
-				temperature = <48000>;
+				temperature = <38000>;
 				hysteresis = <3000>;
 				type = "active";
 			};
