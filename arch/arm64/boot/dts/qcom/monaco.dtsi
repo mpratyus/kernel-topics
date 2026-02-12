@@ -5675,6 +5675,8 @@
 
 				phys = <&mdss_dsi0_phy>;
 
+				refgen-supply = <&refgen>;
+
 				operating-points-v2 = <&mdss_dsi_opp_table>;
 				power-domains = <&rpmhpd RPMHPD_MMCX>;
 
