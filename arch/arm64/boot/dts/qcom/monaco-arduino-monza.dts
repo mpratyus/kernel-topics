@@ -530,7 +530,7 @@
 
 		/* should be linked to pcie-m2-e-connector (when available upstream) */
 
-		status = "disabled";
+		status = "okay";
 	};
 };
 
@@ -586,6 +586,14 @@
 	status = "okay";
 };
 
+&tlmm {
+	wireless-pcie-ao {
+		gpio-hog;
+		gpios = <56 0>;
+		output-high;
+	};
+};
+
 /* Camera TODO: Move to overlay */
 &{/} {
 	cam_pwr_csi0: cam-pwr-csi0 {
@@ -604,7 +612,6 @@
 		output-low;
 	};
 };
-
 
 &clocks {
         cam24m: cam-clk {
