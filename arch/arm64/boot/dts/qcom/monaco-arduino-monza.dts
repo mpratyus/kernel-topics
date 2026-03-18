@@ -559,6 +559,77 @@
 			#cooling-cells = <2>;
 		};
 	};
+
+	leds_controller: leds-controller@22 {
+		compatible = "nxp,pca9635";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x22>;
+
+		red@0 {
+			label = "red";
+			reg = <0>;
+			linux,default-trigger = "none";
+		};
+		green@1 {
+			label = "green";
+			reg = <1>;
+			linux,default-trigger = "none";
+		};
+		blue@2 {
+			label = "blue";
+			reg = <2>;
+			linux,default-trigger = "none";
+		};
+		red@3 {
+			label = "red";
+			reg = <3>;
+			linux,default-trigger = "none";
+		};
+		green@4 {
+			label = "green";
+			reg = <4>;
+			linux,default-trigger = "none";
+		};
+		blue@5 {
+			label = "blue";
+			reg = <5>;
+			linux,default-trigger = "none";
+		};
+		red@6 {
+			label = "red";
+			reg = <6>;
+			linux,default-trigger = "none";
+		};
+		green@7 {
+			label = "green";
+			reg = <7>;
+			linux,default-trigger = "none";
+		};
+		blue@8 {
+			label = "blue";
+			reg = <8>;
+			linux,default-trigger = "none";
+		};
+		red@9 {
+			label = "red";
+			reg = <9>;
+			linux,default-trigger = "none";
+		};
+		green@a {
+			label = "green";
+			reg = <10>;
+			linux,default-trigger = "none";
+		};
+		blue@b {
+			label = "blue";
+			reg = <11>;
+			linux,default-trigger = "none";
+		};
+
+
+};
+
 };
 
 &pcie0 {
