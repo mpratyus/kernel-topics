@@ -184,9 +184,9 @@ static __cold int io_register_restrictions(struct io_ring_ctx *ctx,
 		return ret;
 	}
 	if (ctx->restrictions.op_registered)
-		ctx->op_restricted = 1;
+		ctx->int_flags |= IO_RING_F_OP_RESTRICTED;
 	if (ctx->restrictions.reg_registered)
-		ctx->reg_restricted = 1;
+		ctx->int_flags |= IO_RING_F_REG_RESTRICTED;
 	return 0;
 }
 
@@ -202,7 +202,7 @@ static int io_register_restrictions_task(void __user *arg, unsigned int nr_args)
 		return -EPERM;
 	/*
 	 * Similar to seccomp, disallow setting a filter if task_no_new_privs
-	 * is true and we're not CAP_SYS_ADMIN.
+	 * is false and we're not CAP_SYS_ADMIN.
 	 */
 	if (!task_no_new_privs(current) &&
 	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
@@ -238,7 +238,7 @@ static int io_register_bpf_filter_task(void __user *arg, unsigned int nr_args)
 
 	/*
 	 * Similar to seccomp, disallow setting a filter if task_no_new_privs
-	 * is true and we're not CAP_SYS_ADMIN.
+	 * is false and we're not CAP_SYS_ADMIN.
 	 */
 	if (!task_no_new_privs(current) &&
 	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
@@ -384,7 +384,7 @@ static __cold int io_register_iowq_max_workers(struct io_ring_ctx *ctx,
 	for (i = 0; i < ARRAY_SIZE(new_count); i++)
 		if (new_count[i])
 			ctx->iowq_limits[i] = new_count[i];
-	ctx->iowq_limits_set = true;
+	ctx->int_flags |= IO_RING_F_IOWQ_LIMITS_SET;
 
 	if (tctx && tctx->io_wq) {
 		ret = io_wq_max_workers(tctx->io_wq, new_count);
@@ -633,7 +633,15 @@ overflow:
 	ctx->sq_entries = p->sq_entries;
 	ctx->cq_entries = p->cq_entries;
 
+	/*
+	 * Just mark any flag we may have missed and that the application
+	 * should act on unconditionally. Worst case it'll be an extra
+	 * syscall.
+	 */
+	atomic_or(IORING_SQ_TASKRUN | IORING_SQ_NEED_WAKEUP, &n.rings->sq_flags);
 	ctx->rings = n.rings;
+	rcu_assign_pointer(ctx->rings_rcu, n.rings);
+
 	ctx->sq_sqes = n.sq_sqes;
 	swap_old(ctx, o, n, ring_region);
 	swap_old(ctx, o, n, sq_region);
@@ -642,6 +650,9 @@ overflow:
 out:
 	spin_unlock(&ctx->completion_lock);
 	mutex_unlock(&ctx->mmap_lock);
+	/* Wait for concurrent io_ctx_mark_taskrun() */
+	if (to_free == &o)
+		synchronize_rcu_expedited();
 	io_register_free_rings(ctx, to_free);
 
 	if (ctx->sq_data)
@@ -714,7 +725,7 @@ static int __io_uring_register(struct io_ring_ctx *ctx, unsigned opcode,
 	if (ctx->submitter_task && ctx->submitter_task != current)
 		return -EEXIST;
 
-	if (ctx->reg_restricted && !(ctx->flags & IORING_SETUP_R_DISABLED)) {
+	if ((ctx->int_flags & IO_RING_F_REG_RESTRICTED) && !(ctx->flags & IORING_SETUP_R_DISABLED)) {
 		opcode = array_index_nospec(opcode, IORING_REGISTER_LAST);
 		if (!test_bit(opcode, ctx->restrictions.register_op))
 			return -EACCES;
@@ -889,7 +900,7 @@ static int __io_uring_register(struct io_ring_ctx *ctx, unsigned opcode,
 		ret = -EINVAL;
 		if (!arg || nr_args != 1)
 			break;
-		ret = io_register_zcrx_ifq(ctx, arg);
+		ret = io_register_zcrx(ctx, arg);
 		break;
 	case IORING_REGISTER_RESIZE_RINGS:
 		ret = -EINVAL;
