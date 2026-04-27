@@ -1006,6 +1006,36 @@
 		clocks = <&negcc NE_GCC_UFS_PHY_ICE_CORE_CLK>;
 	};
 
+	cryptobam: dma-controller@1dc4000 {
+		compatible = "qcom,bam-v1.7.4", "qcom,bam-v1.7.0";
+		reg = <0x0 0x01dc4000 0x0 0x28000>;
+
+		interrupts = <GIC_SPI 272 IRQ_TYPE_LEVEL_HIGH>;
+
+		#dma-cells = <1>;
+
+		iommus = <&apps_smmu_0 0x1689 0>;
+
+		qcom,ee = <0>;
+		qcom,num-ees = <4>;
+		num-channels = <20>;
+		qcom,controlled-remotely;
+	};
+
+	crypto: crypto@1dfa000 {
+		compatible = "qcom,nord-qce", "qcom,sm8150-qce", "qcom,qce";
+		reg = <0x0 0x01dfa000 0x0 0x6000>;
+
+		interconnects = <&aggre1_noc_tile MASTER_CRYPTO_CORE0 QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "memory";
+
+		dmas = <&cryptobam 4>, <&cryptobam 5>;
+		dma-names = "rx", "tx";
+
+		iommus = <&apps_smmu_0 0x1689 0>;
+	};
+
 	hscnoc: interconnect@2000000 {
 		compatible = "qcom,nord-hscnoc";
 		reg = <0x0 0x02000000 0x0 0xb22000>;
