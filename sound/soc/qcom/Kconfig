@@ -71,6 +71,14 @@ config SND_SOC_QCOM_COMMON
 config SND_SOC_QCOM_SDW
 	tristate
 
+config SND_SOC_QCOM_QAIF
+	tristate "Qualcomm QAIF audio interface support"
+	depends on COMMON_CLK
+	select REGMAP_MMIO
+	help
+	  Say Y or M to enable Qualcomm Audio Interface support used on
+	  Shikra audio platforms.
+
 config SND_SOC_QDSP6_COMMON
 	tristate
 
