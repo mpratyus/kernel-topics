@@ -797,6 +797,41 @@
 				drive-strength = <2>;
 				bias-pull-up;
 			};
+
+			swr_tx_clk: swr-tx-clk {
+				pins = "gpio105";
+				function = "swr0_tx";
+				drive-strength = <10>;
+				bias-disable;
+			};
+
+			swr_tx_data0: swr-tx-data0 {
+				pins = "gpio106";
+				function = "swr0_tx";
+				drive-strength = <10>;
+				bias-bus-hold;
+			};
+
+			swr_rx_clk: swr-rx-clk {
+				pins = "gpio107";
+				function = "swr0_rx";
+				drive-strength = <10>;
+				bias-disable;
+			};
+
+			swr_rx_data0: swr-rx-data0 {
+				pins = "gpio108";
+				function = "swr0_rx";
+				drive-strength = <10>;
+				bias-bus-hold;
+			};
+
+			swr_rx_data1: swr-rx-data1 {
+				pins = "gpio109";
+				function = "swr0_rx";
+				drive-strength = <10>;
+				bias-bus-hold;
+			};
 		};
 
 		mem_noc: interconnect@d00000 {
