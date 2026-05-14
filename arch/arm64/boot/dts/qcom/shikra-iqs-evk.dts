@@ -8,6 +8,7 @@
 #include "shikra-iqs-som.dtsi"
 #include "shikra-evk.dtsi"
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/sound/qcom,q6afe.h>
 
 / {
 	model = "Qualcomm Technologies, Inc. Shikra IQS EVK";
@@ -19,6 +20,17 @@
 		mmc1 = &sdhc_2; /* SDC2 SD card slot */
 		serial0 = &uart0;
 		serial1 = &uart8;
+	};
+
+	dmic: audio-codec-0 {
+		compatible = "dmic-codec";
+		#sound-dai-cells = <0>;
+		num-channels = <1>;
+	};
+
+	max98357a: audio-codec-1 {
+		compatible = "maxim,max98357a";
+		#sound-dai-cells = <0>;
 	};
 
 	chosen {
@@ -34,6 +46,48 @@
 			regulator-always-on;
 		};
 	};
+
+	sound {
+		compatible = "qcom,qcs9075-sndcard";
+		model = "SHIKRA-IQS-EVK";
+		status = "okay";
+
+		pinctrl-0 = <&hs0_mi2s_active>, <&mi2s1_active>;
+		pinctrl-names = "default";
+
+		hs0-mi2s-playback-dai-link {
+			link-name = "HS0 MI2S Playback";
+
+			codec {
+				sound-dai = <&max98357a>;
+			};
+
+			cpu {
+				sound-dai = <&q6apmbedai PRIMARY_MI2S_RX>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
+		sec-mi2s-capture-dai-link {
+			link-name = "Secondary MI2S Capture";
+
+			codec {
+				sound-dai = <&dmic>;
+			};
+
+			cpu {
+				sound-dai = <&q6apmbedai SECONDARY_MI2S_TX>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+	};
+
 };
 
 &remoteproc_cdsp {
@@ -79,6 +133,45 @@
 	cd-gpios = <&tlmm 89 GPIO_ACTIVE_LOW>;
 
 	status = "okay";
+};
+
+&tlmm {
+	hs0_mi2s_active: hs0-mi2s-active-state {
+		pins = "gpio106", "gpio107", "gpio108", "gpio109";
+		function = "hs0_mi2s";
+		drive-strength = <8>;
+		bias-disable;
+	};
+
+	mi2s1_active: mi2s1-active-state {
+		data0-pins {
+			pins = "gpio100";
+			function = "mi2s1_data0";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		data1-pins {
+			pins = "gpio101";
+			function = "mi2s1_data1";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		sclk-pins {
+			pins = "gpio98";
+			function = "mi2s1_sck";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		ws-pins {
+			pins = "gpio99";
+			function = "mi2s1_ws";
+			drive-strength = <8>;
+			bias-disable;
+		};
+	};
 };
 
 &uart0 {
