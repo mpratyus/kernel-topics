@@ -14,6 +14,7 @@
 #include <asm/div64.h>
 #include <asm/dma.h>
 #include <linux/dma-mapping.h>
+#include <linux/firmware/qcom/qcom_scm.h>
 #include <sound/pcm_params.h>
 #include "q6apm.h"
 
@@ -33,6 +34,7 @@
 #define COMPR_PLAYBACK_MAX_NUM_FRAGMENTS (16 * 4)
 #define COMPR_PLAYBACK_MIN_FRAGMENT_SIZE (8 * 1024)
 #define COMPR_PLAYBACK_MIN_NUM_FRAGMENTS (4)
+#define Q6APM_MAX_VMIDS 8
 #define SID_MASK_DEFAULT	0xF
 
 static const struct snd_compr_codec_caps q6apm_compr_caps = {
@@ -66,12 +68,17 @@ struct q6apm_dai_rtd {
 	unsigned int pcm_size;
 	unsigned int pcm_count;
 	unsigned int periods;
+	unsigned int scm_size;
 	uint64_t bytes_sent;
 	uint64_t bytes_received;
 	uint64_t copied_total;
 	uint16_t bits_per_sample;
 	snd_pcm_uframes_t queue_ptr;
 	bool next_track;
+	phys_addr_t dma_addr;
+	u64 scm_src_perms;
+	bool scm_assigned;
+	bool scm_assign_attempted;
 	enum stream_state state;
 	struct q6apm_graph *graph;
 	spinlock_t lock;
@@ -80,7 +87,116 @@ struct q6apm_dai_rtd {
 
 struct q6apm_dai_data {
 	long long sid;
+	int num_vmids;
+	u32 vmids[Q6APM_MAX_VMIDS];
+	bool use_scm_assign;
 };
+
+static int q6apm_dai_assign_memory(struct snd_soc_component *component,
+				   struct q6apm_dai_rtd *prtd,
+				   const struct q6apm_dai_data *pdata)
+{
+	struct qcom_scm_vmperm *dst_vmids;
+	int dst_count = 0;
+	int ret;
+	int index;
+
+	if (!pdata->use_scm_assign)
+		return 0;
+
+	if (prtd->scm_assigned)
+		return 0;
+
+	if (!prtd->dma_addr || !prtd->pcm_size) {
+		dev_err(component->dev,
+			"%s: invalid dma addr/size addr=%pa size=%u\n",
+			__func__, &prtd->dma_addr, prtd->pcm_size);
+		return -EINVAL;
+	}
+
+	if (!qcom_scm_is_available()) {
+		dev_err(component->dev, "%s: qcom_scm not ready\n", __func__);
+		return -EPROBE_DEFER;
+	}
+
+	dst_vmids = kcalloc(pdata->num_vmids + 1, sizeof(*dst_vmids),
+			    GFP_KERNEL);
+	if (!dst_vmids)
+		return -ENOMEM;
+
+	/* Always keep HLOS RW so CPU can continue buffer access */
+	dst_vmids[dst_count].vmid = QCOM_SCM_VMID_HLOS;
+	dst_vmids[dst_count].perm = QCOM_SCM_PERM_RW;
+	dst_count++;
+
+	for (index = 0; index < pdata->num_vmids; index++) {
+		if (pdata->vmids[index] == QCOM_SCM_VMID_HLOS)
+			continue;
+
+		dst_vmids[dst_count].vmid = pdata->vmids[index];
+		dst_vmids[dst_count].perm = QCOM_SCM_PERM_RW;
+		dst_count++;
+	}
+
+	prtd->scm_size = ALIGN(prtd->pcm_size, PAGE_SIZE);
+	prtd->scm_src_perms = BIT(QCOM_SCM_VMID_HLOS);
+	prtd->scm_assign_attempted = true;
+
+	dev_dbg(component->dev,
+		"%s: assigning dma=%pa size=%u vmids=%d sid=0x%llx\n",
+		__func__, &prtd->dma_addr, prtd->scm_size, dst_count, pdata->sid);
+
+	ret = qcom_scm_assign_mem(prtd->dma_addr, prtd->scm_size,
+				  &prtd->scm_src_perms, dst_vmids, dst_count);
+	kfree(dst_vmids);
+	if (ret) {
+		dev_err(component->dev,
+			"%s: qcom_scm_assign_mem failed ret=%d dma=%pa size=%u\n",
+			__func__, ret, &prtd->dma_addr, prtd->scm_size);
+		return ret;
+	}
+
+	prtd->scm_assigned = true;
+	dev_dbg(component->dev, "%s: assign success src_perms=0x%llx\n",
+		__func__, prtd->scm_src_perms);
+
+	return 0;
+}
+
+static void q6apm_dai_unassign_memory(struct snd_soc_component *component,
+				      struct q6apm_dai_rtd *prtd,
+				      const struct q6apm_dai_data *pdata)
+{
+	struct qcom_scm_vmperm hlos = {
+		.vmid = QCOM_SCM_VMID_HLOS,
+		.perm = QCOM_SCM_PERM_RW,
+	};
+	int ret;
+
+	if (!pdata->use_scm_assign || !prtd->scm_assigned)
+		return;
+
+	if (!qcom_scm_is_available()) {
+		dev_err(component->dev,
+			"%s: qcom_scm not available during unassign\n", __func__);
+		return;
+	}
+
+	ret = qcom_scm_assign_mem(prtd->dma_addr, prtd->scm_size,
+				  &prtd->scm_src_perms, &hlos, 1);
+	if (ret) {
+		dev_err(component->dev,
+			"%s: qcom_scm_assign_mem(unassign) failed ret=%d dma=%pa size=%u src_perms=0x%llx\n",
+			__func__, ret, &prtd->dma_addr, prtd->scm_size,
+			prtd->scm_src_perms);
+		return;
+	}
+
+	prtd->scm_src_perms = BIT(QCOM_SCM_VMID_HLOS);
+	prtd->scm_assigned = false;
+	dev_dbg(component->dev, "%s: unassign success dma=%pa size=%u\n",
+		__func__, &prtd->dma_addr, prtd->scm_size);
+}
 
 static const struct snd_pcm_hardware q6apm_dai_hardware_capture = {
 	.info =                 (SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -939,6 +1055,8 @@ static int q6apm_dai_probe(struct platform_device *pdev)
 	struct device_node *node = dev->of_node;
 	struct q6apm_dai_data *pdata;
 	struct of_phandle_args args;
+	u32 sid = 0;
+	int vmids;
 	int rc;
 
 	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
@@ -946,10 +1064,56 @@ static int q6apm_dai_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	rc = of_parse_phandle_with_fixed_args(node, "iommus", 1, 0, &args);
-	if (rc < 0)
-		pdata->sid = -1;
-	else
+	if (rc < 0) {
+		/* Optional explicit SID override if iommus absent */
+		if (!of_property_read_u32(node, "qcom,dsp-sid", &sid)) {
+			pdata->sid = sid & SID_MASK_DEFAULT;
+			dev_info(dev, "%s: using qcom,dsp-sid sid=0x%llx\n",
+				 __func__, pdata->sid);
+		} else {
+			pdata->sid = -1;
+			dev_info(dev,
+				 "%s: no iommus/qcom,dsp-sid, SID disabled\n",
+				 __func__);
+		}
+	} else {
 		pdata->sid = args.args[0] & SID_MASK_DEFAULT;
+		dev_info(dev, "%s: using iommus sid=0x%llx\n",
+			 __func__, pdata->sid);
+	}
+
+	/* Optional VMID mode; if absent, behave exactly as legacy path */
+	vmids = of_property_count_u32_elems(node, "qcom,vmid");
+	if (vmids == -EINVAL) {
+		pdata->num_vmids = 0;
+		pdata->use_scm_assign = false;
+		dev_info(dev,
+			 "%s: qcom,vmid absent, scm-assign disabled\n", __func__);
+	} else if (vmids < 0) {
+		dev_err(dev,
+			"%s: failed to count qcom,vmid elements: %d\n",
+			__func__, vmids);
+		return vmids;
+	} else if (vmids > Q6APM_MAX_VMIDS) {
+		dev_err(dev,
+			"%s: too many qcom,vmid entries (%d), max=%d\n",
+			__func__, vmids, Q6APM_MAX_VMIDS);
+		return -EINVAL;
+	} else {
+		rc = of_property_read_u32_array(node, "qcom,vmid",
+						pdata->vmids, vmids);
+		if (rc) {
+			dev_err(dev,
+				"%s: failed to read qcom,vmid ret=%d\n",
+				__func__, rc);
+			return rc;
+		}
+
+		pdata->num_vmids = vmids;
+		pdata->use_scm_assign = true;
+		dev_info(dev, "%s: scm-assign enabled vmid_count=%d\n",
+			 __func__, vmids);
+	}
 
 	dev_set_drvdata(dev, pdata);
 

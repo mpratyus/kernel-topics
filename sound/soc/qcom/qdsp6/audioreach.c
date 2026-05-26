@@ -152,6 +152,13 @@ struct apm_i2s_module_intf_cfg {
 
 #define APM_I2S_INTF_CFG_PSIZE ALIGN(sizeof(struct apm_i2s_module_intf_cfg), 8)
 
+struct apm_audio_if_module_intf_cfg {
+	struct apm_module_param_data param_data;
+	struct param_id_audio_if_intf_cfg cfg;
+} __packed;
+
+#define APM_AUDIO_IF_INTF_CFG_PSIZE ALIGN(sizeof(struct apm_audio_if_module_intf_cfg), 8)
+
 struct apm_module_hw_ep_mf_cfg {
 	struct apm_module_param_data param_data;
 	struct param_id_hw_ep_mf mf;
@@ -248,7 +255,7 @@ static void *__audioreach_alloc_pkt(int payload_size, uint32_t opcode, uint32_t 
 	pkt->hdr.dest_port = dest_port;
 	pkt->hdr.src_port = src_port;
 
-	pkt->hdr.dest_domain = GPR_DOMAIN_ID_ADSP;
+	pkt->hdr.dest_domain = GPR_DOMAIN_ID_MODEM;
 	pkt->hdr.src_domain = GPR_DOMAIN_ID_APPS;
 	pkt->hdr.token = token;
 	pkt->hdr.opcode = opcode;
@@ -1042,6 +1049,117 @@ static int audioreach_i2s_set_media_format(struct q6apm_graph *graph,
 	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
 }
 
+static int audioreach_audio_if_set_media_format(struct q6apm_graph *graph,
+						const struct audioreach_module *module,
+						const struct audioreach_module_config *cfg)
+{
+	struct param_id_hw_ep_frame_duration *fd_cfg;
+	struct apm_module_param_data *param_data;
+	struct apm_audio_if_module_intf_cfg *intf_cfg;
+	struct apm_module_hw_ep_mf_cfg *hw_cfg;
+	int ic_sz = APM_AUDIO_IF_INTF_CFG_PSIZE;
+	int ep_sz = APM_HW_EP_CFG_PSIZE;
+	int fd_sz = ALIGN(sizeof(struct apm_module_param_data) +
+			  sizeof(struct param_id_hw_ep_frame_duration), 8);
+	int size = ic_sz + ep_sz + fd_sz;
+	void *p;
+
+	/*
+	 * AUDIO_IF (QAIF) sends three params in one APM_CMD_SET_CFG:
+	 *   1. PARAM_ID_AUDIO_IF_INTF_CFG  (0x08001B11) - interface config
+	 *   2. PARAM_ID_HW_EP_MF_CFG       (0x08001017) - media format
+	 *   3. PARAM_ID_HW_EP_FRAME_DURATION (0x08001B2F) - frame duration
+	 *
+	 * NOTE: AUDIO_IF does NOT support PARAM_ID_HW_EP_FRAME_SIZE_FACTOR
+	 * (0x08001018) - using it causes ADSP_EUNSUPPORTED (3) on Hawi.
+	 */
+	struct gpr_pkt *pkt __free(kfree) =
+		audioreach_alloc_apm_cmd_pkt(size, APM_CMD_SET_CFG, 0);
+	if (IS_ERR(pkt))
+		return PTR_ERR(pkt);
+
+	p = (void *)pkt + GPR_HDR_SIZE + APM_CMD_HDR_SIZE;
+	intf_cfg = p;
+
+	param_data = &intf_cfg->param_data;
+	param_data->module_instance_id = module->instance_id;
+	param_data->error_code = 0;
+	param_data->param_id = PARAM_ID_AUDIO_IF_INTF_CFG;
+	param_data->param_size = ic_sz - APM_MODULE_PARAM_DATA_SIZE;
+
+	/* Interface config from topology binary tokens */
+	intf_cfg->cfg.qaif_type = 0; /* QAIF */
+	intf_cfg->cfg.intf_idx = 2;
+	intf_cfg->cfg.intf_mode = module->sync_mode; /* TDM=0/PCM=1/I2S=2 */
+	intf_cfg->cfg.ctrl_data_out_enable = module->ctrl_data_out_enable;
+	intf_cfg->cfg.active_slot_mask = module->slot_mask;
+	intf_cfg->cfg.nslots_per_frame = module->nslots_per_frame;
+	intf_cfg->cfg.slot_width = module->slot_width;
+	intf_cfg->cfg.active_lane_mask = 2;
+	intf_cfg->cfg.frame_sync_rate = 0;
+	intf_cfg->cfg.frame_sync_src = module->sync_src;
+	intf_cfg->cfg.frame_sync_mode = 1;
+	intf_cfg->cfg.invert_frame_sync_pulse = module->ctrl_invert_sync_pulse;
+	intf_cfg->cfg.frame_sync_data_delay = module->ctrl_sync_data_delay;
+	intf_cfg->cfg.bit_clk_type = 0;
+	intf_cfg->cfg.inv_int_bit_clk = 0;
+	intf_cfg->cfg.inv_ext_bit_clk = 0;
+
+	p += ic_sz;
+	hw_cfg = p;
+	param_data = &hw_cfg->param_data;
+	param_data->module_instance_id = module->instance_id;
+	param_data->error_code = 0;
+	param_data->param_id = PARAM_ID_HW_EP_MF_CFG;
+	param_data->param_size = ep_sz - APM_MODULE_PARAM_DATA_SIZE;
+
+	hw_cfg->mf.sample_rate = cfg->sample_rate;
+	hw_cfg->mf.bit_width = cfg->bit_width;
+	hw_cfg->mf.num_channels = cfg->num_channels;
+	hw_cfg->mf.data_format = module->data_format;
+
+	p += ep_sz;
+	/* 3rd param: PARAM_ID_HW_EP_FRAME_DURATION */
+	param_data = p;
+	param_data->module_instance_id = module->instance_id;
+	param_data->error_code = 0;
+	param_data->param_id = PARAM_ID_HW_EP_FRAME_DURATION;
+	param_data->param_size = sizeof(*fd_cfg);
+	fd_cfg = (struct param_id_hw_ep_frame_duration *)(param_data + 1);
+	fd_cfg->frame_duration_in_us = 1000; /* 48 samples @ 48 kHz */
+	fd_cfg->allow_frame_duration_normalization = 1;
+	fd_cfg->min_normalized_frame_dur_us = 1;
+	fd_cfg->max_normalized_frame_dur_us = 100000;
+
+	dev_err(graph->apm->dev,
+		"%s: AUDIO_IF SET_CFG:\n"
+		"  module_id=0x%x instance_id=0x%x\n"
+		"  INTF_CFG: qaif_type=%u intf_idx=%u intf_mode=%u(%s)\n"
+		"  INTF_CFG: ctrl_data_out=%u active_slot_mask=0x%x nslots=%u slot_width=%u\n"
+		"  INTF_CFG: active_lane_mask=0x%x frame_sync_rate=%u frame_sync_src=%u\n"
+		"  INTF_CFG: frame_sync_mode=%u invert_fs=%u fs_data_delay=%u bit_clk_type=%u\n"
+		"  HW_EP_MF: sample_rate=%u bit_width=%u num_channels=%u data_format=%u\n"
+		"  FRAME_DUR: dur_us=%u normalize=%u\n",
+		__func__,
+		module->module_id, module->instance_id,
+		intf_cfg->cfg.qaif_type, intf_cfg->cfg.intf_idx, intf_cfg->cfg.intf_mode,
+		intf_cfg->cfg.intf_mode == 0 ? "TDM" :
+			intf_cfg->cfg.intf_mode == 1 ? "PCM" : "I2S",
+		intf_cfg->cfg.ctrl_data_out_enable,
+		intf_cfg->cfg.active_slot_mask, intf_cfg->cfg.nslots_per_frame,
+		intf_cfg->cfg.slot_width,
+		intf_cfg->cfg.active_lane_mask, intf_cfg->cfg.frame_sync_rate,
+		intf_cfg->cfg.frame_sync_src,
+		intf_cfg->cfg.frame_sync_mode, intf_cfg->cfg.invert_frame_sync_pulse,
+		intf_cfg->cfg.frame_sync_data_delay, intf_cfg->cfg.bit_clk_type,
+		hw_cfg->mf.sample_rate, hw_cfg->mf.bit_width,
+		hw_cfg->mf.num_channels, hw_cfg->mf.data_format,
+		fd_cfg->frame_duration_in_us,
+		fd_cfg->allow_frame_duration_normalization);
+
+	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
+}
+
 static int audioreach_logging_set_media_format(struct q6apm_graph *graph,
 					       const struct audioreach_module *module)
 {
@@ -1341,6 +1459,10 @@ int audioreach_set_media_format(struct q6apm_graph *graph,
 	case MODULE_ID_I2S_SINK:
 		rc = audioreach_i2s_set_media_format(graph, module, cfg);
 		break;
+	case MODULE_ID_AUDIO_IF_SOURCE:
+	case MODULE_ID_AUDIO_IF_SINK:
+		rc = audioreach_audio_if_set_media_format(graph, module, cfg);
+		break;
 	case MODULE_ID_WR_SHARED_MEM_EP:
 		rc = audioreach_shmem_set_media_format(graph, module, cfg);
 		break;
@@ -1400,6 +1522,67 @@ void audioreach_graph_free_buf(struct q6apm_graph *graph)
 	mutex_unlock(&graph->lock);
 }
 EXPORT_SYMBOL_GPL(audioreach_graph_free_buf);
+
+int audioreach_map_memory_regions(struct q6apm_graph *graph, unsigned int dir, size_t period_sz,
+				  unsigned int periods, bool is_contiguous)
+{
+	struct apm_shared_map_region_payload *mregions;
+	struct apm_cmd_shared_mem_map_regions *cmd;
+	u32 num_regions, buf_sz, payload_size;
+	struct audioreach_graph_data *data;
+	struct gpr_pkt *pkt __free(kfree) = NULL;
+	void *p;
+	int i;
+
+	if (dir == SNDRV_PCM_STREAM_PLAYBACK)
+		data = &graph->rx_data;
+	else
+		data = &graph->tx_data;
+
+	if (is_contiguous) {
+		num_regions = 1;
+		buf_sz = period_sz * periods;
+	} else {
+		buf_sz = period_sz;
+		num_regions = periods;
+	}
+
+	/* DSP expects size should be aligned to 4K */
+	buf_sz = ALIGN(buf_sz, 4096);
+
+	payload_size = sizeof(*cmd) + (sizeof(*mregions) * num_regions);
+
+	pkt = audioreach_alloc_apm_pkt(payload_size,
+				       APM_CMD_SHARED_MEM_MAP_REGIONS, dir,
+				       graph->port->id);
+	if (IS_ERR(pkt))
+		return PTR_ERR(pkt);
+
+	p = (void *)pkt + GPR_HDR_SIZE;
+	cmd = p;
+	cmd->mem_pool_id = APM_MEMORY_MAP_SHMEM8_4K_POOL;
+	cmd->num_regions = num_regions;
+
+	cmd->property_flag = 0x0;
+
+	mregions = p + sizeof(*cmd);
+
+	mutex_lock(&graph->lock);
+
+	for (i = 0; i < num_regions; i++) {
+		struct audio_buffer *ab;
+
+		ab = &data->buf[i];
+		mregions->shm_addr_lsw = lower_32_bits(ab->phys);
+		mregions->shm_addr_msw = upper_32_bits(ab->phys);
+		mregions->mem_size_bytes = buf_sz;
+		++mregions;
+	}
+	mutex_unlock(&graph->lock);
+
+	return audioreach_graph_send_cmd_sync(graph, pkt, APM_CMD_RSP_SHARED_MEM_MAP_REGIONS);
+}
+EXPORT_SYMBOL_GPL(audioreach_map_memory_regions);
 
 int audioreach_shared_memory_send_eos(struct q6apm_graph *graph)
 {

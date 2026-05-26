@@ -753,6 +753,62 @@ static int audioreach_widget_i2s_module_load(struct audioreach_module *mod,
 	return 0;
 }
 
+static int audioreach_widget_tdm_module_load(struct audioreach_module *mod,
+					     const struct snd_soc_tplg_vendor_array *mod_array)
+{
+	const struct snd_soc_tplg_vendor_value_elem *mod_elem;
+	int tkn_count = 0;
+
+	mod_elem = mod_array->value;
+
+	while (tkn_count <= (le32_to_cpu(mod_array->num_elems) - 1)) {
+		switch (le32_to_cpu(mod_elem->token)) {
+		case AR_TKN_U32_MODULE_HW_IF_IDX:
+			mod->hw_interface_idx = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_FMT_DATA:
+			mod->data_format = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_HW_IF_TYPE:
+			mod->hw_interface_type = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_SYNC_SRC:
+			mod->sync_src = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_CTRL_DATA_OUT_ENABLE:
+			mod->ctrl_data_out_enable = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_SLOT_MASK:
+			mod->slot_mask = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_NSLOTS_PER_FRAME:
+			mod->nslots_per_frame = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_SLOT_WIDTH:
+			mod->slot_width = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_SYNC_MODE:
+			mod->sync_mode = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_CTRL_INVERT_SYNC_PULSE:
+			mod->ctrl_invert_sync_pulse = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_CTRL_SYNC_DATA_DELAY:
+			mod->ctrl_sync_data_delay = le32_to_cpu(mod_elem->value);
+			break;
+		case AR_TKN_U32_MODULE_RESERVED:
+			mod->reserved = le32_to_cpu(mod_elem->value);
+			break;
+		default:
+			break;
+		}
+		tkn_count++;
+		mod_elem++;
+	}
+
+	return 0;
+}
+
 static int audioreach_widget_dp_module_load(struct audioreach_module *mod,
 					    const struct snd_soc_tplg_vendor_array *mod_array)
 {
@@ -805,6 +861,16 @@ static int audioreach_widget_load_buffer(struct snd_soc_component *component,
 	case MODULE_ID_I2S_SINK:
 	case MODULE_ID_I2S_SOURCE:
 		audioreach_widget_i2s_module_load(mod, mod_array);
+		break;
+	case MODULE_ID_AUDIO_IF_SINK:
+	case MODULE_ID_AUDIO_IF_SOURCE:
+		/*
+		 * AUDIO_IF (QAIF) uses the same topology tokens as TDM:
+		 * HW_IF_IDX, HW_IF_TYPE, FMT_DATA, SYNC_SRC, SLOT_MASK,
+		 * NSLOTS_PER_FRAME, SLOT_WIDTH, SYNC_MODE, etc.
+		 * Reuse the TDM module loader.
+		 */
+		audioreach_widget_tdm_module_load(mod, mod_array);
 		break;
 	case MODULE_ID_DISPLAY_PORT_SINK:
 		audioreach_widget_dp_module_load(mod, mod_array);

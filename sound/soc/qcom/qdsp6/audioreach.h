@@ -20,6 +20,21 @@ struct q6apm_graph;
 #define MODULE_ID_PLACEHOLDER_DECODER	0x07001009
 #define MODULE_ID_I2S_SINK		0x0700100A
 #define MODULE_ID_I2S_SOURCE		0x0700100B
+/*
+ * TDM module IDs - from upstream patch 0001.
+ * Used on legacy platforms (sm8x50, sc8280xp etc.).
+ * Hawi uses MODULE_ID_AUDIO_IF_SINK/SOURCE instead.
+ */
+#define MODULE_ID_TDM_SINK		0x0700100E
+#define MODULE_ID_TDM_SOURCE		0x0700100F
+/*
+ * QAIF - Qualcomm Audio Interface (Unified Audio Interface)
+ * Used on Hawi and newer SoCs as a unified replacement for TDM/I2S.
+ * Confirmed from art_mtp ACDB: TMDE shows PARAM_ID_AUDIO_IF_CFG (0x08001B11)
+ * for these module instances.
+ */
+#define MODULE_ID_AUDIO_IF_SINK		0x0700117C
+#define MODULE_ID_AUDIO_IF_SOURCE	0x0700117D
 #define MODULE_ID_SAL			0x07001010
 #define MODULE_ID_MFC			0x07001015
 #define MODULE_ID_DATA_LOGGING		0x0700101A
@@ -495,6 +510,50 @@ struct param_id_i2s_intf_cfg {
 #define PORT_ID_I2S_OUPUT		1
 #define I2S_STACK_SIZE			2048
 
+/*
+ * QAIF - Qualcomm Audio Interface (Unified Audio Interface) - Hawi
+ * MODULE_ID_AUDIO_IF_SINK  = 0x0700117C
+ * MODULE_ID_AUDIO_IF_SOURCE = 0x0700117D
+ *
+ * Two params sent at runtime (same pattern as I2S/DMA):
+ *   1. PARAM_ID_HW_EP_MF_CFG (0x08001017) - media format
+ *   2. PARAM_ID_AUDIO_IF_INTF_CFG (0x08001B11) - interface config
+ *
+ * intf_mode selects the physical interface type:
+ *   TDM=0, PCM=1, I2S=2
+ *
+ * Struct layout from audio_if_api.xml (maxSize=0x24, 36 bytes).
+ */
+#define PARAM_ID_AUDIO_IF_INTF_CFG		0x08001B11
+
+/* intf_mode values */
+#define AUDIO_IF_INTF_MODE_TDM			0x0
+#define AUDIO_IF_INTF_MODE_PCM			0x1
+#define AUDIO_IF_INTF_MODE_I2S			0x2
+
+/* qaif_type values */
+#define AUDIO_IF_TYPE_QAIF			0x0
+#define AUDIO_IF_TYPE_QAIF_VA			0x1
+
+struct param_id_audio_if_intf_cfg {
+	u16 qaif_type;			/* byteOffset=0x00 */
+	u16 intf_idx;			/* byteOffset=0x02 */
+	u16 intf_mode;			/* byteOffset=0x04: TDM=0, PCM=1, I2S=2 */
+	u16 ctrl_data_out_enable;		/* byteOffset=0x06 */
+	u32 active_slot_mask;		/* byteOffset=0x08 */
+	u16 nslots_per_frame;		/* byteOffset=0x0C */
+	u16 slot_width;			/* byteOffset=0x0E */
+	u32 active_lane_mask;		/* byteOffset=0x10 */
+	u32 frame_sync_rate;		/* byteOffset=0x14 */
+	u16 frame_sync_src;		/* byteOffset=0x18 */
+	u16 frame_sync_mode;		/* byteOffset=0x1A */
+	u16 invert_frame_sync_pulse;	/* byteOffset=0x1C */
+	u16 frame_sync_data_delay;		/* byteOffset=0x1E */
+	u16 bit_clk_type;			/* byteOffset=0x20 */
+	u8  inv_int_bit_clk;		/* byteOffset=0x22 */
+	u8  inv_ext_bit_clk;		/* byteOffset=0x23 */
+} __packed;
+
 #define PARAM_ID_DISPLAY_PORT_INTF_CFG		0x08001154
 
 struct param_id_display_port_intf_cfg {
@@ -513,6 +572,21 @@ struct param_id_hw_ep_mf {
 } __packed;
 
 #define PARAM_ID_HW_EP_FRAME_SIZE_FACTOR	0x08001018
+
+/*
+ * PARAM_ID_HW_EP_FRAME_DURATION (0x08001B2F)
+ * Used by AUDIO_IF (QAIF) module instead of PARAM_ID_HW_EP_FRAME_SIZE_FACTOR.
+ * AUDIO_IF does NOT support FRAME_SIZE_FACTOR - using it causes
+ * ADSP_EUNSUPPORTED (3) on Hawi. Use FRAME_DURATION with 1000 us default.
+ */
+#define PARAM_ID_HW_EP_FRAME_DURATION		0x08001B2F
+
+struct param_id_hw_ep_frame_duration {
+	u32 frame_duration_in_us;
+	u32 allow_frame_duration_normalization;
+	u32 min_normalized_frame_dur_us;
+	u32 max_normalized_frame_dur_us;
+} __packed;
 
 struct param_id_fram_size_factor {
 	uint32_t frame_size_factor;
@@ -786,6 +860,17 @@ struct audioreach_module {
 	uint32_t data_format;
 	uint32_t hw_interface_type;
 
+	/* TDM / AUDIO_IF (QAIF) shared interface fields */
+	u32 sync_src;
+	u32 ctrl_data_out_enable;
+	u32 slot_mask;
+	u32 nslots_per_frame;
+	u32 slot_width;
+	u32 sync_mode;
+	u32 ctrl_invert_sync_pulse;
+	u32 ctrl_sync_data_delay;
+	u32 reserved;
+
 	/* PCM module specific */
 	uint32_t interleave_type;
 
@@ -839,6 +924,10 @@ int audioreach_tplg_init(struct snd_soc_component *component);
 
 /* Module specific */
 void audioreach_graph_free_buf(struct q6apm_graph *graph);
+int audioreach_map_memory_regions(struct q6apm_graph *graph,
+				  unsigned int dir, size_t period_sz,
+				  unsigned int periods,
+				  bool is_contiguous);
 int audioreach_send_cmd_sync(struct device *dev, gpr_device_t *gdev, struct gpr_ibasic_rsp_result_t *result,
 			     struct mutex *cmd_lock, gpr_port_t *port, wait_queue_head_t *cmd_wait,
 			     const struct gpr_pkt *pkt, uint32_t rsp_opcode);

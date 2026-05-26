@@ -791,8 +791,8 @@ struct audioreach_module *q6apm_find_module_by_mid(struct q6apm_graph *graph, ui
 	struct q6apm *apm = graph->apm;
 
 	return __q6apm_find_module_by_mid(apm, info, mid);
-
 }
+EXPORT_SYMBOL_GPL(q6apm_find_module_by_mid);
 
 static int apm_callback(const struct gpr_resp_pkt *data, void *priv, int op)
 {

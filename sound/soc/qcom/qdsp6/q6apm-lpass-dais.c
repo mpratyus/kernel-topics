@@ -22,6 +22,10 @@ struct q6apm_lpass_dai_data {
 	struct q6apm_graph *graph[APM_PORT_MAX];
 	bool is_port_started[APM_PORT_MAX];
 	struct audioreach_module_config module_config[APM_PORT_MAX];
+	/* TDM slot config stored by set_tdm_slot(), applied in prepare() */
+	unsigned int tdm_nslots[APM_PORT_MAX];
+	unsigned int tdm_slot_width[APM_PORT_MAX];
+	unsigned int tdm_slot_mask[APM_PORT_MAX];
 };
 
 static int q6dma_set_channel_map(struct snd_soc_dai *dai,
@@ -212,6 +216,38 @@ static int q6apm_lpass_dai_prepare(struct snd_pcm_substream *substream, struct s
 		dai_data->graph[graph_id] = graph;
 	}
 
+	/*
+	 * Apply TDM slot config stored by set_tdm_slot().
+	 * set_tdm_slot() is called before graph_open() so the graph was NULL
+	 * at that time.  Now that the graph is open, apply the stored values
+	 * to override the topology defaults (nslots=8) with the runtime
+	 * values from the machine driver (nslots=4 from qcom,tdm-slots DT).
+	 */
+	if (dai_data->tdm_nslots[dai->id] && dai_data->graph[dai->id]) {
+		struct audioreach_module *tdm_mod;
+
+		tdm_mod = q6apm_find_module_by_mid(dai_data->graph[dai->id],
+						   MODULE_ID_AUDIO_IF_SINK);
+		if (!tdm_mod)
+			tdm_mod = q6apm_find_module_by_mid(dai_data->graph[dai->id],
+							   MODULE_ID_AUDIO_IF_SOURCE);
+		if (!tdm_mod)
+			tdm_mod = q6apm_find_module_by_mid(dai_data->graph[dai->id],
+							   MODULE_ID_TDM_SINK);
+		if (!tdm_mod)
+			tdm_mod = q6apm_find_module_by_mid(dai_data->graph[dai->id],
+							   MODULE_ID_TDM_SOURCE);
+		if (tdm_mod) {
+			tdm_mod->nslots_per_frame = dai_data->tdm_nslots[dai->id];
+			tdm_mod->slot_width       = dai_data->tdm_slot_width[dai->id];
+			tdm_mod->slot_mask        = dai_data->tdm_slot_mask[dai->id];
+		} else {
+			dev_warn(dai->dev,
+				 "no AUDIO_IF/TDM module found in graph %d\n",
+				 dai->id);
+		}
+	}
+
 	cfg->direction = substream->stream;
 	rc = q6apm_graph_media_format_pcm(dai_data->graph[dai->id], cfg);
 	if (rc) {
@@ -289,6 +325,38 @@ static const struct snd_soc_dai_ops q6hdmi_ops = {
 	.trigger	= q6apm_lpass_dai_trigger,
 };
 
+static int q6tdm_set_tdm_slot(struct snd_soc_dai *dai,
+			      unsigned int tx_mask, unsigned int rx_mask,
+			      int slots, int slot_width)
+{
+	struct q6apm_lpass_dai_data *dai_data = dev_get_drvdata(dai->dev);
+
+	/* RX DAI ids are even, TX are odd */
+	dai_data->tdm_nslots[dai->id] = slots;
+	dai_data->tdm_slot_width[dai->id] = slot_width;
+	dai_data->tdm_slot_mask[dai->id] = (dai->id & 0x1) ? tx_mask : rx_mask;
+
+	return 0;
+}
+
+static int q6tdm_set_sysclk(struct snd_soc_dai *dai, int clk_id,
+			    unsigned int freq, int dir)
+{
+	return 0;
+}
+
+static const struct snd_soc_dai_ops q6tdm_ops = {
+	.prepare	= q6apm_lpass_dai_prepare,
+	.startup	= q6apm_lpass_dai_startup,
+	.shutdown	= q6apm_lpass_dai_shutdown,
+	.set_channel_map	= q6dma_set_channel_map,
+	.hw_params	= q6dma_hw_params,
+	.set_fmt	= q6i2s_set_fmt,
+	.set_tdm_slot	= q6tdm_set_tdm_slot,
+	.set_sysclk	= q6tdm_set_sysclk,
+	.trigger	= q6apm_lpass_dai_trigger,
+};
+
 static const struct snd_soc_component_driver q6apm_lpass_dai_component = {
 	.name = "q6apm-be-dai-component",
 	.of_xlate_dai_name = q6dsp_audio_ports_of_xlate_dai_name,
@@ -315,6 +383,7 @@ static int q6apm_lpass_dai_dev_probe(struct platform_device *pdev)
 	cfg.q6i2s_ops = &q6i2s_ops;
 	cfg.q6dma_ops = &q6dma_ops;
 	cfg.q6hdmi_ops = &q6hdmi_ops;
+	cfg.q6tdm_ops = &q6tdm_ops;
 	dais = q6dsp_audio_ports_set_config(dev, &cfg, &num_dais);
 
 	return devm_snd_soc_register_component(dev, &q6apm_lpass_dai_component, dais, num_dais);
